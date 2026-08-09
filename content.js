@@ -13,6 +13,8 @@
   let commentsCache = []; // [{ vposMs, body, postedAt, nicoruCount, userId }]
   let sidebarVisible = false;
   let toggleButtonObserver = null;
+  let currentVideoId = null;
+  let videoWatchInterval = null;
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -21,6 +23,7 @@
     if (enabled) {
       startWatching();
       startFetchComments();
+      startVideoWatch();
     }
   }
 
@@ -36,6 +39,49 @@
       }
     }
   });
+
+  // ── SPA Navigation Detection ─────────────────────
+  // niconico is a React SPA: navigating from video A to video B does not
+  // reload the page, so the content script is NOT re-run. Poll the URL to
+  // detect video changes and reset/re-fetch comments.
+  function startVideoWatch() {
+    if (videoWatchInterval) return;
+
+    currentVideoId = window.location.pathname.split("/").pop();
+
+    videoWatchInterval = setInterval(() => {
+      const videoId = window.location.pathname.split("/").pop();
+      if (videoId !== currentVideoId) {
+        console.log(
+          "[NicoSideComment] Video changed:",
+          currentVideoId,
+          "→",
+          videoId
+        );
+        currentVideoId = videoId;
+        resetForVideoChange();
+      }
+    }, 1000);
+  }
+
+  function stopVideoWatch() {
+    if (videoWatchInterval) {
+      clearInterval(videoWatchInterval);
+      videoWatchInterval = null;
+    }
+  }
+
+  function resetForVideoChange() {
+    // Clear cached comments and the overlay content
+    commentsCache = [];
+    if (overlay) {
+      const sc = overlay.querySelector(".nsc-scroll-container");
+      if (sc) sc.innerHTML = "";
+    }
+
+    // Fetch comments for the new video
+    startFetchComments();
+  }
 
   // ── Fullscreen Detection ────────────────────────
   let _watching = false;
@@ -523,6 +569,7 @@
     stopTimecodeSync();
     stopToggleButtonWatch();
     removeToggleButton();
+    stopVideoWatch();
 
     const allOverlays = document.querySelectorAll(
       `#${OVERLAY_ID}, [data-nico-side-comment]`
