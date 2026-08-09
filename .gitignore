@@ -3,3 +3,7 @@ Thumbs.db
 *.log
 node_modules/
 dist/
+
+# ローカル管理ファイル（リポジトリには含めない）
+AGENTS.md
+KNOWLEDGE.md

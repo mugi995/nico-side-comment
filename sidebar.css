@@ -99,6 +99,24 @@
   }
 }
 
+/* ── Toggle Button (in player controller) ───────── */
+button[data-side-comment-toggle] {
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+button[data-side-comment-toggle]:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+button[data-side-comment-toggle] svg {
+  transition: fill 0.15s ease;
+}
+
+button[data-side-comment-toggle]:hover svg {
+  fill: #ffffff !important;
+}
+
 /* ── Responsive ─────────────────────────────────── */
 /* On smaller screens, reduce sidebar width */
 @media (max-width: 900px) {
