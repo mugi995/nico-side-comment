@@ -11,6 +11,8 @@
   let timecodeIntervalId = null;
   let fullscreenTarget = null;
   let commentsCache = []; // [{ vposMs, body, postedAt, nicoruCount, userId }]
+  let sidebarVisible = false;
+  let toggleButtonObserver = null;
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -113,15 +115,18 @@
 
         const payloadB64 = threadKey.split(".")[1];
         const payload = JSON.parse(base64urlDecode(payloadB64));
-        const mainTid = (payload.tids && payload.tids[0]) || null;
-        if (!mainTid) throw new Error("No thread ID in key");
+        const tids = payload.tids || [];
+        if (!tids.length) throw new Error("No thread ID in key");
 
+        // Include ALL thread IDs as targets.
+        // sm videos have a single tid; so/channel videos may have multiple
+        // (e.g. tids[0] = 0 comments, tids[1] = the real main thread).
         params = {
-          targets: [
-            { id: mainTid, fork: "owner" },
-            { id: mainTid, fork: "main" },
-            { id: mainTid, fork: "easy" },
-          ],
+          targets: tids.flatMap((tid) => [
+            { id: tid, fork: "owner" },
+            { id: tid, fork: "main" },
+            { id: tid, fork: "easy" },
+          ]),
           language: "ja-jp",
         };
       }
@@ -285,22 +290,32 @@
     fullscreenTarget = target;
     console.log("[NicoSideComment] enterFullscreenMode, target:", fullscreenTarget);
 
-    fullscreenTarget.style.right = "340px";
-    fullscreenTarget.style.left = "0";
+    // If comments were not fetched yet (e.g. page loaded before player data),
+    // retry fetching now.
+    if (commentsCache.length === 0) {
+      startFetchComments();
+    }
+
+    // Sidebar is hidden by default; video fills the whole screen
+    sidebarVisible = false;
 
     if (!overlay) {
       renderComments();
       if (!overlay) return;
     }
 
-    overlay.style.display = "block";
-    console.log("[NicoSideComment] overlay shown");
+    overlay.style.display = "none";
+
+    injectToggleButton();
+    startToggleButtonWatch();
 
     startTimecodeSync();
   }
 
   function exitFullscreenMode() {
     stopTimecodeSync();
+    stopToggleButtonWatch();
+    removeToggleButton();
 
     if (fullscreenTarget) {
       fullscreenTarget.style.right = "";
@@ -312,6 +327,128 @@
     }
 
     fullscreenTarget = null;
+    sidebarVisible = false;
+  }
+
+  // ── Sidebar Toggle ──────────────────────────────
+  function toggleSidebar(visible) {
+    sidebarVisible = visible;
+
+    if (fullscreenTarget) {
+      if (sidebarVisible) {
+        fullscreenTarget.style.right = "340px";
+        fullscreenTarget.style.left = "0";
+      } else {
+        fullscreenTarget.style.right = "";
+        fullscreenTarget.style.left = "";
+      }
+    }
+
+    if (overlay) {
+      overlay.style.display = sidebarVisible ? "block" : "none";
+    }
+
+    updateToggleButton();
+    console.log("[NicoSideComment] Sidebar", sidebarVisible ? "shown" : "hidden");
+  }
+
+  function injectToggleButton() {
+    if (document.querySelector("[data-side-comment-toggle]")) return;
+
+    const controller = document.querySelector('[data-styling-area="floating"]');
+    if (!controller) return;
+
+    const anchor = controller.querySelector('button[aria-label="コメントを非表示にする"]');
+    if (!anchor) return;
+
+    const btn = document.createElement("button");
+    btn.setAttribute("data-side-comment-toggle", "");
+    btn.type = "button";
+    btn.className = "Pressable cursor_pointer";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.justifyContent = "center";
+    btn.style.padding = "0";
+    btn.style.border = "none";
+    btn.style.background = "none";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSidebar(!sidebarVisible);
+    });
+
+    // Insert before the comment visibility toggle button
+    anchor.parentNode.insertBefore(btn, anchor);
+
+    updateToggleButton();
+    console.log("[NicoSideComment] Toggle button injected");
+  }
+
+  function updateToggleButton() {
+    const btn = document.querySelector("[data-side-comment-toggle]");
+    if (!btn) return;
+
+    // Clear existing content
+    btn.innerHTML = "";
+
+    const label = sidebarVisible ? "サイドバーを隠す" : "サイドバーを表示";
+    btn.setAttribute("aria-label", label);
+    btn.title = label;
+
+    // SVG icon (comment bubble; slash when visible)
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "24");
+    svg.setAttribute("height", "24");
+    svg.style.width = "24px";
+    svg.style.height = "24px";
+    svg.style.padding = "8px";
+    svg.style.boxSizing = "content-box";
+    svg.style.fill = "rgba(242, 242, 242, 0.8)";
+
+    const path = document.createElementNS(svgNS, "path");
+    if (sidebarVisible) {
+      // Bubble with slash
+      path.setAttribute(
+        "d",
+        "M6.8 18H3.6A1.6 1.6 0 0 1 2 16.4V3.6C2 2.72 2.72 2 3.6 2h16.8c.88 0 1.6.72 1.6 1.6v12.8c0 .88-.72 1.6-1.6 1.6h-7.9l-4.18 3.77a1 1 0 0 1-.97.17.8.8 0 0 1-.55-.74zM20.7 3.3l-17 17 .6.6 17-17z"
+      );
+    } else {
+      // Comment bubble (right-side chat bubble)
+      path.setAttribute(
+        "d",
+        "M6.8 18H3.6A1.6 1.6 0 0 1 2 16.4V3.6C2 2.72 2.72 2 3.6 2h16.8c.88 0 1.6.72 1.6 1.6v12.8c0 .88-.72 1.6-1.6 1.6h-7.9l-4.18 3.77a1 1 0 0 1-.97.17.8.8 0 0 1-.55-.74z"
+      );
+    }
+    svg.appendChild(path);
+    btn.appendChild(svg);
+  }
+
+  function removeToggleButton() {
+    const btn = document.querySelector("[data-side-comment-toggle]");
+    if (btn) btn.remove();
+  }
+
+  // ── Toggle Button Survival Watch ────────────────
+  function startToggleButtonWatch() {
+    if (toggleButtonObserver) return;
+
+    const controller = document.querySelector('[data-styling-area="floating"]');
+    if (!controller) return;
+
+    toggleButtonObserver = new MutationObserver(() => {
+      if (!document.querySelector("[data-side-comment-toggle]")) {
+        injectToggleButton();
+      }
+    });
+    toggleButtonObserver.observe(controller, { childList: true, subtree: true });
+  }
+
+  function stopToggleButtonWatch() {
+    if (toggleButtonObserver) {
+      toggleButtonObserver.disconnect();
+      toggleButtonObserver = null;
+    }
   }
 
   // ── Timecode Sync ───────────────────────────────
@@ -384,6 +521,8 @@
   // ── Cleanup ─────────────────────────────────────
   function destroyOverlay() {
     stopTimecodeSync();
+    stopToggleButtonWatch();
+    removeToggleButton();
 
     const allOverlays = document.querySelectorAll(
       `#${OVERLAY_ID}, [data-nico-side-comment]`
