@@ -1,0 +1,108 @@
+/* Nico Side Comment - Sidebar Overlay Styles */
+
+/* ── Overlay Container ──────────────────────────── */
+#nico-side-comment-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 340px;
+  height: 100vh;
+  z-index: 2147483646;
+  pointer-events: auto;
+  box-sizing: border-box;
+  overflow: hidden;
+  animation: nsc-slide-in 0.2s ease-out;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Scroll Container ───────────────────────────── */
+#nico-side-comment-overlay .nsc-scroll-container {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: 12px 12px 80px 12px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #f0f0f0;
+}
+
+/* ── Scrollbar Styling ──────────────────────────── */
+#nico-side-comment-overlay .nsc-scroll-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* ── Comment Items ────────────────────────────────── */
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-item {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e8e8e8;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(200, 200, 200, 0.55);
+}
+
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-nicoru {
+  color: rgba(0, 200, 140, 0.7);
+  font-weight: bold;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-date {
+  margin-left: auto;
+}
+
+/* ── Active Comment Highlight ───────────────────── */
+#nico-side-comment-overlay .nsc-scroll-container .nsc-comment-item.nsc-active-comment {
+  background: rgba(0, 180, 120, 0.25);
+  border-left: 3px solid rgba(0, 180, 120, 0.8);
+  padding-left: 8px;
+  border-radius: 4px;
+  transition: background 0.3s ease;
+}
+
+/* ── Animation ──────────────────────────────────── */
+@keyframes nsc-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ── Responsive ─────────────────────────────────── */
+/* On smaller screens, reduce sidebar width */
+@media (max-width: 900px) {
+  #nico-side-comment-overlay {
+    width: 280px;
+  }
+}
