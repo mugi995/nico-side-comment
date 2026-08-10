@@ -3,6 +3,8 @@ Thumbs.db
 *.log
 node_modules/
 dist/
+*.xpi
+*.zip
 
 # ローカル管理ファイル（リポジトリには含めない）
 AGENTS.md
