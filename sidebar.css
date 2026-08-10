@@ -48,7 +48,7 @@
 
 /* ── Comment Items ────────────────────────────────── */
 #nico-side-comment-overlay .nsc-scroll-container .nsc-comment-item {
-  padding: 8px 0;
+  padding: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -70,7 +70,7 @@
 }
 
 #nico-side-comment-overlay .nsc-scroll-container .nsc-comment-nicoru {
-  color: rgba(0, 200, 140, 0.7);
+  color: rgba(255, 200, 0, 0.8);
   font-weight: bold;
 }
 
@@ -80,11 +80,35 @@
 
 /* ── Active Comment Highlight ───────────────────── */
 #nico-side-comment-overlay .nsc-scroll-container .nsc-comment-item.nsc-active-comment {
-  background: rgba(0, 180, 120, 0.25);
-  border-left: 3px solid rgba(0, 180, 120, 0.8);
-  padding-left: 8px;
-  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
   transition: background 0.3s ease;
+}
+
+/* ── Auto-scroll Resume Popup ───────────────────── */
+#nico-side-comment-overlay .nsc-scroll-container .nsc-resume-popup {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(40, 40, 40, 0.95);
+  color: #e8e8e8;
+  font-size: 12px;
+  font-weight: bold;
+  font-family: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#nico-side-comment-overlay .nsc-scroll-container .nsc-resume-popup:hover {
+  background: rgba(60, 60, 60, 0.95);
 }
 
 /* ── Animation ──────────────────────────────────── */
