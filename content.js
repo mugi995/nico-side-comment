@@ -285,6 +285,7 @@
       item.className = "nsc-comment-item";
       item.setAttribute("data-nsc-vpos-ms", String(c.vposMs));
       item.setAttribute("data-nsc-time", formatVpos(c.vposMs));
+      if (c.id) item.setAttribute("data-nsc-id", String(c.id));
 
       // ── Main column (body + meta) ──
       const main = document.createElement("div");
@@ -430,17 +431,17 @@
     }
     try {
       if (c.nicoruId) {
-        // Un-nicoru
+        // Un-nicoru (nvapi base, same as the player)
         const resp = await fetch(
-          `${commentServer}/v1/users/me/nicoru/send/${encodeURIComponent(c.nicoruId)}`,
+          `https://nvapi.nicovideo.jp/v1/users/me/nicoru/send/${encodeURIComponent(c.nicoruId)}`,
           {
             method: "DELETE",
             headers: {
               "X-Frontend-Id": "6",
               "X-Frontend-Version": "0",
-              "X-Request-With": "https://www.nicovideo.jp",
+              "X-Request-With": "nicovideo",
             },
-            credentials: "omit",
+            credentials: "include",
           }
         );
         if (!resp.ok) throw new Error(`Un-nicoru failed: ${resp.status}`);
@@ -487,8 +488,13 @@
         );
         if (!resp.ok) throw new Error(`Nicoru failed: ${resp.status}`);
         const data = await resp.json();
-        c.nicoruId = (data.data && data.data.nicoruId) || true;
-        c.nicoruCount = (c.nicoruCount || 0) + 1;
+        // Use the server-provided values (same as the player's Wr() update)
+        c.nicoruId = data.data && data.data.nicoruId;
+        if (typeof data.data.nicoruCount === "number") {
+          c.nicoruCount = data.data.nicoruCount;
+        } else {
+          c.nicoruCount = (c.nicoruCount || 0) + 1;
+        }
       }
 
       // Update button state
@@ -501,37 +507,73 @@
   }
 
   async function addCommentNg(c) {
-    await addNg({ type: "word", source: c.body }, "コメントをNG登録しました");
+    const ok = await addNg(c, { type: "word", source: c.body }, "コメントをNG登録しました");
+    if (!ok) return;
+    // Remove comments whose body partially matches the NG word
+    const needle = c.body;
+    const targetIds = commentsCache
+      .filter((x) => x.body && x.body.includes(needle))
+      .map((x) => x.id);
+    commentsCache = commentsCache.filter((x) => !x.body || !x.body.includes(needle));
+    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
+    if (sc) removeElementsByIds(sc, targetIds);
   }
 
   async function addUserNg(c) {
     if (!c.userId) return;
-    await addNg({ type: "id", source: c.userId }, "ユーザーをNG登録しました");
+    const ok = await addNg(c, { type: "id", source: c.userId }, "ユーザーをNG登録しました");
+    if (!ok) return;
+    // Remove all comments by this user
+    const targetIds = commentsCache
+      .filter((x) => x.userId === c.userId)
+      .map((x) => x.id);
+    commentsCache = commentsCache.filter((x) => x.userId !== c.userId);
+    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
+    if (sc) removeElementsByIds(sc, targetIds);
   }
 
-  async function addNg(payload, successMsg) {
+  // Remove comment DOM elements by their data-nsc-id values
+  function removeElementsByIds(sc, ids) {
+    for (const id of ids) {
+      if (id === undefined || id === null || id === "") continue;
+      sc.querySelectorAll(`[data-nsc-id="${CSS.escape(String(id))}"]`)
+        .forEach((el) => el.remove());
+    }
+  }
+
+  async function addNg(c, payload, successMsg) {
     try {
       // NG API lives on nvapi.nicovideo.jp (not the nvcomment server),
       // which allows credentials: "include" via explicit ACAO.
+      // Request body is form-urlencoded (same as the player):
+      //   type / source / languageId / threadId / commentId
       const resp = await fetch(
         `https://nvapi.nicovideo.jp/v1/users/me/ng-comments/client`,
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json;charset=utf-8",
             "X-Frontend-Id": "6",
             "X-Frontend-Version": "0",
-            "X-Request-With": "https://www.nicovideo.jp",
+            "X-Request-With": "nicovideo",
           },
           credentials: "include",
-          body: JSON.stringify({ targets: [payload] }),
+          body: new URLSearchParams({
+            type: payload.type,
+            source: payload.source,
+            languageId: "0",
+            threadId: String(c.$threadId),
+            commentId: String(c.no),
+          }).toString(),
         }
       );
       if (!resp.ok) throw new Error(`NG failed: ${resp.status}`);
       console.log("[NicoSideComment]", successMsg);
+      return true;
     } catch (err) {
       console.error("[NicoSideComment] NG error:", err);
+      return false;
     }
   }
 
