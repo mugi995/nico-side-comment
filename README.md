@@ -30,7 +30,7 @@
 2. Firefox で xpi ファイルを開く（またはファイルを Firefox ウィンドウにドラッグ＆ドロップ）
 3. インストール確認ダイアログで「追加」をクリック
 
-開発用に zip を読み込む場合は `about:debugging` → 「この Firefox」タブ → 「一時的なアドオンを読み込む」で `nico-side-comment-firefox.zip` を選択します（Firefox を再起動すると解除されます）。
+開発用に zip を読み込む場合は `about:debugging` → 「この Firefox」タブ → 「一時的なアドオンを読み込む」で `nico-side-comment.zip` を選択します（Firefox を再起動すると解除されます）。
 
 ## 使い方
 
@@ -64,7 +64,7 @@
 | ファイル | 内容 |
 |---------|------|
 | `*.xpi` | **署名済み Firefox 用インストールファイル**（配布用） |
-| `nico-side-comment-firefox.zip` | 開発用（AMO 提出・一時アドオン読み込み用） |
+| `nico-side-comment.zip` | 開発用（AMO 提出・一時アドオン読み込み用） |
 
 ※ zip / xpi は git 管理外（.gitignore 対象）です。
 
