@@ -56,10 +56,11 @@
 ## ファイル構成
 
 ```
-├── manifest.json    # 拡張機能定義 (Manifest V3、Chrome/Firefox互換)
-├── background.js    # Service Worker / background script（ON/OFF切り替え）
+├── manifest.json    # 拡張機能定義 (Manifest V3、Chrome用)
+├── background.js    # Service Worker（ON/OFF切り替え）
 ├── content.js       # メインロジック（コメント取得・サイドバー表示）
 ├── sidebar.css      # サイドバーoverlay用スタイル
+├── build_firefox.py # Firefox配布用zipビルドスクリプト
 ├── icons/           # ツールバーアイコン
 └── KNOWLEDGE.md     # ニコニコAPI・DOM解析の知見メモ（ローカル管理）
 ```
@@ -69,7 +70,9 @@
 | ファイル | 内容 |
 |---------|------|
 | `*.xpi` | **署名済み Firefox 用インストールファイル**（配布用） |
-| `nico-side-comment.zip` | 開発用（AMO 提出・一時アドオン読み込み用） |
+| `nico-side-comment.zip` | Firefox 配布用 zip（AMO 提出・一時アドオン読み込み用） |
+
+Firefox 用 zip は `python3 build_firefox.py` で生成します（`background.scripts` と `browser_specific_settings` を自動適用）。
 
 ※ zip / xpi は git 管理外（.gitignore 対象）です。
 

@@ -13,6 +13,7 @@
   let commentsCache = []; // [{ vposMs, body, postedAt, nicoruCount, userId }]
   let sidebarVisible = false;
   let toggleButtonObserver = null;
+  let panelShiftObserver = null;
   let currentVideoId = null;
   let videoWatchInterval = null;
   let autoScrollEnabled = true;
@@ -382,8 +383,60 @@
       overlay.style.display = "none";
     }
 
+    removePanelShift();
     fullscreenTarget = null;
     sidebarVisible = false;
+  }
+
+  // ── Floating Panel Shift (avoid sidebar overlay) ──
+  // The niconico settings floating panel ([data-nvpc-part="floating"])
+  // has z-index 10, far below our overlay (2147483646), so it gets hidden
+  // behind the comment sidebar. When the sidebar is shown, shift the panel
+  // left by the overlay width (340px) so it is not covered.
+  //
+  // Note: nico injects CSS that pins the panel to right:24px !important with
+  // a higher-specificity selector, so a plain CSS rule cannot override it,
+  // and a non-important inline style loses to that !important rule. We must
+  // force inline !important via setProperty(), and re-apply it whenever
+  // floating-ui rewrites the panel's style (observed via attributes).
+  function applyPanelShift() {
+    if (panelShiftObserver) return;
+
+    const shiftPanel = () => {
+      document
+        .querySelectorAll(
+          '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+        )
+        .forEach((el) => {
+          el.style.setProperty("left", "auto", "important");
+          el.style.setProperty("right", "340px", "important");
+        });
+    };
+
+    shiftPanel();
+
+    panelShiftObserver = new MutationObserver(shiftPanel);
+    panelShiftObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+  }
+
+  function removePanelShift() {
+    if (panelShiftObserver) {
+      panelShiftObserver.disconnect();
+      panelShiftObserver = null;
+    }
+    document
+      .querySelectorAll(
+        '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+      )
+      .forEach((el) => {
+        el.style.removeProperty("left");
+        el.style.removeProperty("right");
+      });
   }
 
   // ── Sidebar Toggle ──────────────────────────────
@@ -398,6 +451,12 @@
         fullscreenTarget.style.right = "";
         fullscreenTarget.style.left = "";
       }
+    }
+
+    if (sidebarVisible) {
+      applyPanelShift();
+    } else {
+      removePanelShift();
     }
 
     if (overlay) {
@@ -739,6 +798,7 @@
     detachScrollListeners();
     hideResumePopup();
     autoScrollEnabled = true;
+    removePanelShift();
 
     const allOverlays = document.querySelectorAll(
       `#${OVERLAY_ID}, [data-nico-side-comment]`
