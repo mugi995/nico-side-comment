@@ -28,6 +28,29 @@
   color: #f0f0f0;
 }
 
+/* ── Loading Spinner ─────────────────────────────── */
+/* Shows while comments are being fetched (sibling of the scroll container,
+   centered over it). display is toggled by content.js (showLoading/hideLoading). */
+#nico-side-comment-overlay .nsc-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#nico-side-comment-overlay .nsc-loading::after {
+  content: "";
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #f0f0f0;
+  border-radius: 50%;
+  animation: nsc-spin 0.8s linear infinite;
+}
+
 /* ── Scrollbar Styling ──────────────────────────── */
 #nico-side-comment-overlay .nsc-scroll-container::-webkit-scrollbar {
   width: 6px;
@@ -203,6 +226,12 @@
   to {
     transform: translateX(0);
     opacity: 1;
+  }
+}
+
+@keyframes nsc-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
