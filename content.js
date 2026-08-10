@@ -946,15 +946,8 @@
         }
       }
 
-      scrollContainer.querySelectorAll(".nsc-active-comment").forEach(
-        (el) => el.classList.remove("nsc-active-comment")
-      );
-
-      if (bestEl && bestDelta < 10000) {
-        bestEl.classList.add("nsc-active-comment");
-        if (autoScrollEnabled) {
-          bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
+      if (bestEl && bestDelta < 10000 && autoScrollEnabled) {
+        bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     }, 1000);
   }
