@@ -395,17 +395,22 @@
   // left by the overlay width (340px) so it is not covered.
   //
   // Note: nico injects CSS that pins the panel to right:24px !important with
-  // a higher-specificity selector, so a plain CSS rule cannot override it.
-  // Instead we force the inline style via MutationObserver, which beats any
-  // stylesheet rule and survives floating-ui re-renders.
+  // a higher-specificity selector, so a plain CSS rule cannot override it,
+  // and a non-important inline style loses to that !important rule. We must
+  // force inline !important via setProperty(), and re-apply it whenever
+  // floating-ui rewrites the panel's style (observed via attributes).
   function applyPanelShift() {
     if (panelShiftObserver) return;
 
     const shiftPanel = () => {
-      document.querySelectorAll('[data-nvpc-part="floating"]').forEach((el) => {
-        el.style.left = "";
-        el.style.right = "340px";
-      });
+      document
+        .querySelectorAll(
+          '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+        )
+        .forEach((el) => {
+          el.style.setProperty("left", "auto", "important");
+          el.style.setProperty("right", "340px", "important");
+        });
     };
 
     shiftPanel();
@@ -414,6 +419,8 @@
     panelShiftObserver.observe(document.body, {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ["style"],
     });
   }
 
@@ -422,10 +429,14 @@
       panelShiftObserver.disconnect();
       panelShiftObserver = null;
     }
-    document.querySelectorAll('[data-nvpc-part="floating"]').forEach((el) => {
-      el.style.left = "";
-      el.style.right = "";
-    });
+    document
+      .querySelectorAll(
+        '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+      )
+      .forEach((el) => {
+        el.style.removeProperty("left");
+        el.style.removeProperty("right");
+      });
   }
 
   // ── Sidebar Toggle ──────────────────────────────
