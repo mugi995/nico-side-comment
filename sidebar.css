@@ -54,6 +54,12 @@
   gap: 8px;
   padding: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  /* Asymmetric transition: CSS transitions follow the *after-change style*,
+     so this base rule's transition only runs when .nsc-active-comment is
+     REMOVED (fade-out). When the class is ADDED, the after-change style is
+     .nsc-active-comment (transition: none), so the highlight appears
+     instantly without a fade-in gap (prevents flicker on dense comments). */
+  transition: background 0.2s ease;
 }
 
 #nico-side-comment-overlay .nsc-scroll-container .nsc-comment-main {
@@ -169,10 +175,13 @@
 }
 
 /* ── Active Comment Highlight ───────────────────── */
+/* transition: none here — the after-change style decides: when the class is
+   added, no transition runs (instant highlight); the base rule above handles
+   the fade-out on removal. */
 #nico-side-comment-overlay .nsc-scroll-container .nsc-comment-item.nsc-active-comment {
   background: rgba(128, 128, 128, 0.35);
   border-radius: 6px;
-  transition: background 0.3s ease;
+  transition: none;
 }
 
 /* ── Auto-scroll Resume Popup ───────────────────── */
