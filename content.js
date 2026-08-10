@@ -450,7 +450,8 @@
     btn.setAttribute("aria-label", label);
     btn.title = label;
 
-    // SVG icon (comment bubble; slash when visible)
+    // SVG icon: panel + list layout
+    // Outer frame (video area) + right panel (sidebar) with 3 comment lines.
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -460,23 +461,62 @@
     svg.style.height = "24px";
     svg.style.padding = "8px";
     svg.style.boxSizing = "content-box";
-    svg.style.fill = "rgba(242, 242, 242, 0.8)";
 
-    const path = document.createElementNS(svgNS, "path");
+    const baseFill = "rgba(242, 242, 242, 0.8)";
+
     if (sidebarVisible) {
-      // Bubble with slash
-      path.setAttribute(
+      // Sidebar shown: filled panel + white lines
+      const panel = document.createElementNS(svgNS, "path");
+      panel.setAttribute("d", "M14 4h7v16h-7z");
+      panel.setAttribute("fill", "rgba(242, 242, 242, 0.5)");
+      svg.appendChild(panel);
+
+      const frame = document.createElementNS(svgNS, "path");
+      frame.setAttribute(
         "d",
-        "M6.8 18H3.6A1.6 1.6 0 0 1 2 16.4V3.6C2 2.72 2.72 2 3.6 2h16.8c.88 0 1.6.72 1.6 1.6v12.8c0 .88-.72 1.6-1.6 1.6h-7.9l-4.18 3.77a1 1 0 0 1-.97.17.8.8 0 0 1-.55-.74zM20.7 3.3l-17 17 .6.6 17-17z"
+        "M3 4h18v16H3zM14 4v16M16 8h3.5v1.5H16zM16 12h3.5v1.5H16zM16 16h3.5v1.5H16z"
       );
+      frame.setAttribute("fill", "none");
+      frame.setAttribute("stroke", baseFill);
+      frame.setAttribute("stroke-width", "1.6");
+      svg.appendChild(frame);
+
+      const lines = document.createElementNS(svgNS, "path");
+      lines.setAttribute(
+        "d",
+        "M16 8h3.5v1.5H16zM16 12h3.5v1.5H16zM16 16h3.5v1.5H16z"
+      );
+      lines.setAttribute("fill", baseFill);
+      svg.appendChild(lines);
+
+      // Diagonal slash over the whole frame (indicates "hide")
+      const slash = document.createElementNS(svgNS, "path");
+      slash.setAttribute("d", "M21 4 L3 20");
+      slash.setAttribute("stroke", baseFill);
+      slash.setAttribute("stroke-width", "1.6");
+      slash.setAttribute("stroke-linecap", "round");
+      svg.appendChild(slash);
     } else {
-      // Comment bubble (right-side chat bubble)
-      path.setAttribute(
+      // Sidebar hidden: empty frame + panel boundary + lines
+      const frame = document.createElementNS(svgNS, "path");
+      frame.setAttribute(
         "d",
-        "M6.8 18H3.6A1.6 1.6 0 0 1 2 16.4V3.6C2 2.72 2.72 2 3.6 2h16.8c.88 0 1.6.72 1.6 1.6v12.8c0 .88-.72 1.6-1.6 1.6h-7.9l-4.18 3.77a1 1 0 0 1-.97.17.8.8 0 0 1-.55-.74z"
+        "M3 4h18v16H3zM14 4v16M16 8h3.5v1.5H16zM16 12h3.5v1.5H16zM16 16h3.5v1.5H16z"
       );
+      frame.setAttribute("fill", "none");
+      frame.setAttribute("stroke", baseFill);
+      frame.setAttribute("stroke-width", "1.6");
+      svg.appendChild(frame);
+
+      const lines = document.createElementNS(svgNS, "path");
+      lines.setAttribute(
+        "d",
+        "M16 8h3.5v1.5H16zM16 12h3.5v1.5H16zM16 16h3.5v1.5H16z"
+      );
+      lines.setAttribute("fill", baseFill);
+      svg.appendChild(lines);
     }
-    svg.appendChild(path);
+
     btn.appendChild(svg);
   }
 
