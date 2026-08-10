@@ -15,10 +15,22 @@
 
 ## インストール
 
+### Chrome
+
 1. `chrome://extensions/` を開く
 2. デベロッパーモードを有効化
 3. 「パッケージ化されていない拡張機能を読み込む」から本ディレクトリを選択
 4. ツールバーアイコンをクリックして有効化（緑色 = ON）
+
+### Firefox
+
+配布されている**署名済み xpi** を使用します。
+
+1. xpi ファイルをダウンロード
+2. Firefox で xpi ファイルを開く（またはファイルを Firefox ウィンドウにドラッグ＆ドロップ）
+3. インストール確認ダイアログで「追加」をクリック
+
+開発用に zip を読み込む場合は `about:debugging` → 「この Firefox」タブ → 「一時的なアドオンを読み込む」で `nico-side-comment-firefox.zip` を選択します（Firefox を再起動すると解除されます）。
 
 ## 使い方
 
@@ -39,13 +51,22 @@
 ## ファイル構成
 
 ```
-├── manifest.json    # Chrome拡張定義 (Manifest V3)
-├── background.js    # Service Worker（ON/OFF切り替え）
+├── manifest.json    # 拡張機能定義 (Manifest V3、Chrome/Firefox互換)
+├── background.js    # Service Worker / background script（ON/OFF切り替え）
 ├── content.js       # メインロジック（コメント取得・サイドバー表示）
 ├── sidebar.css      # サイドバーoverlay用スタイル
 ├── icons/           # ツールバーアイコン
 └── KNOWLEDGE.md     # ニコニコAPI・DOM解析の知見メモ（ローカル管理）
 ```
+
+## 配布物
+
+| ファイル | 内容 |
+|---------|------|
+| `*.xpi` | **署名済み Firefox 用インストールファイル**（配布用） |
+| `nico-side-comment-firefox.zip` | 開発用（AMO 提出・一時アドオン読み込み用） |
+
+※ zip / xpi は git 管理外（.gitignore 対象）です。
 
 ## 技術メモ
 
