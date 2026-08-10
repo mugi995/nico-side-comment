@@ -10,10 +10,11 @@
   let overlay = null;
   let timecodeIntervalId = null;
   let fullscreenTarget = null;
-  let commentsCache = []; // [{ vposMs, body, postedAt, nicoruCount, userId }]
+  let commentsCache = []; // [{ vposMs, body, postedAt, nicoruCount, userId, no, fork, threadId, nicoruId }]
   let sidebarVisible = false;
   let toggleButtonObserver = null;
   let panelShiftObserver = null;
+  let commentServer = DEFAULT_SERVER;
   let currentVideoId = null;
   let videoWatchInterval = null;
   let autoScrollEnabled = true;
@@ -29,6 +30,9 @@
       startVideoWatch();
     }
   }
+
+  // Close any open comment action menu when clicking elsewhere
+  document.addEventListener("click", closeAllCommentMenus);
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "TOGGLE") {
@@ -205,12 +209,16 @@
       }
 
       // Step 4: Merge all forks, dedupe by id, sort by vposMs
+      commentServer = server;
       const merged = [];
       const seen = new Set();
       for (const t of data.data.threads || []) {
         for (const c of t.comments || []) {
           if (c.id && seen.has(c.id)) continue;
           if (c.id) seen.add(c.id);
+          // Attach thread info needed for nicoru / NG / report actions
+          c.$fork = t.fork;
+          c.$threadId = t.id;
           merged.push(c);
         }
       }
@@ -278,10 +286,14 @@
       item.setAttribute("data-nsc-vpos-ms", String(c.vposMs));
       item.setAttribute("data-nsc-time", formatVpos(c.vposMs));
 
+      // ── Main column (body + meta) ──
+      const main = document.createElement("div");
+      main.className = "nsc-comment-main";
+
       const body = document.createElement("div");
       body.className = "nsc-comment-body";
       body.textContent = c.body;
-      item.appendChild(body);
+      main.appendChild(body);
 
       const meta = document.createElement("div");
       meta.className = "nsc-comment-meta";
@@ -294,7 +306,8 @@
       if (c.nicoruCount > 0) {
         const nicoru = document.createElement("span");
         nicoru.className = "nsc-comment-nicoru";
-        nicoru.textContent = "▲ " + c.nicoruCount;
+        nicoru.appendChild(createNicoruIcon("small"));
+        nicoru.appendChild(document.createTextNode(" " + c.nicoruCount));
         meta.appendChild(nicoru);
       }
 
@@ -303,9 +316,266 @@
       postedSpan.textContent = formatDate(c.postedAt);
       meta.appendChild(postedSpan);
 
-      item.appendChild(meta);
+      main.appendChild(meta);
+      item.appendChild(main);
+
+      // ── Nicoru button (right side, always visible) ──
+      const nicoruBtn = document.createElement("button");
+      nicoruBtn.type = "button";
+      nicoruBtn.className = "nsc-nicoru-btn";
+      nicoruBtn.title = "ニコる";
+      nicoruBtn.appendChild(createNicoruIcon("small", !!c.nicoruId));
+      nicoruBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleNicoru(c, nicoruBtn);
+      });
+      item.appendChild(nicoruBtn);
+
+      // ── Hover menu (seek / report / NG) ──
+      const menu = document.createElement("div");
+      menu.className = "nsc-hover-menu";
+
+      const menuItems = [
+        {
+          label: "▶ この時間に移動",
+          handler: () => seekToComment(c),
+        },
+        {
+          label: "⚑ 通報",
+          handler: () => reportComment(c),
+        },
+        {
+          label: "NG このコメントをNG",
+          handler: () => addCommentNg(c),
+        },
+        {
+          label: "NG このユーザーをNG",
+          handler: () => addUserNg(c),
+        },
+      ];
+      for (const mi of menuItems) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "nsc-hover-menu-item";
+        btn.textContent = mi.label;
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          mi.handler();
+          // Close menu after action
+          item.classList.remove("nsc-menu-open");
+        });
+        menu.appendChild(btn);
+      }
+
+      item.appendChild(menu);
+
+      // Click to toggle action menu
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = item.classList.contains("nsc-menu-open");
+        closeAllCommentMenus();
+        if (!isOpen) {
+          item.classList.add("nsc-menu-open");
+        }
+      });
+
       sc.appendChild(item);
     }
+  }
+
+  // ── Comment Action Menu (click to open) ───────────
+  function closeAllCommentMenus() {
+    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
+    if (!sc) return;
+    sc.querySelectorAll(".nsc-comment-item.nsc-menu-open").forEach((el) => {
+      el.classList.remove("nsc-menu-open");
+    });
+  }
+
+  function createNicoruIcon(size, filled) {
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    const cls = "nsc-nicoru-icon" + (size === "small" ? " nsc-nicoru-icon-small" : "");
+    svg.setAttribute("class", cls);
+    const path = document.createElementNS(svgNS, "path");
+    // Heart shape (niconico nicoru icon)
+    path.setAttribute(
+      "d",
+      "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+    );
+    if (filled) {
+      path.setAttribute("fill", "currentColor");
+    } else {
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "currentColor");
+      path.setAttribute("stroke-width", "1.8");
+    }
+    svg.appendChild(path);
+    return svg;
+  }
+
+  // ── Comment Actions (seek / nicoru / NG / report) ──
+  function seekToComment(c) {
+    const video = document.querySelector('video[data-name="video-content"]');
+    if (!video || typeof c.vposMs !== "number") return;
+    video.currentTime = c.vposMs / 1000;
+    console.log("[NicoSideComment] Seek to", c.vposMs, "ms");
+  }
+
+  async function toggleNicoru(c, btn) {
+    if (c.$fork === "owner") {
+      console.log("[NicoSideComment] Owner comments cannot be nicoru'd");
+      return;
+    }
+    try {
+      if (c.nicoruId) {
+        // Un-nicoru
+        const resp = await fetch(
+          `${commentServer}/v1/users/me/nicoru/send/${encodeURIComponent(c.nicoruId)}`,
+          {
+            method: "DELETE",
+            headers: {
+              "X-Frontend-Id": "6",
+              "X-Frontend-Version": "0",
+              "X-Request-With": "https://www.nicovideo.jp",
+            },
+            credentials: "omit",
+          }
+        );
+        if (!resp.ok) throw new Error(`Un-nicoru failed: ${resp.status}`);
+        c.nicoruId = null;
+        c.nicoruCount = Math.max(0, (c.nicoruCount || 1) - 1);
+      } else {
+        // Get nicoru key (nvapi base, same as the player)
+        const keyUrl =
+          `https://nvapi.nicovideo.jp/v1/comment/keys/nicoru` +
+          `?threadId=${encodeURIComponent(c.$threadId)}` +
+          `&fork=${encodeURIComponent(c.$fork)}&pc=1`;
+        const keyResp = await fetch(keyUrl, {
+          headers: {
+            "X-Frontend-Id": "6",
+            "X-Frontend-Version": "0",
+            "X-Request-With": "https://www.nicovideo.jp",
+          },
+          credentials: "include",
+        });
+        if (!keyResp.ok) throw new Error(`Nicoru key failed: ${keyResp.status}`);
+        const keyData = await keyResp.json();
+        const nicoruKey = keyData.data && keyData.data.nicoruKey;
+
+        // Send nicoru
+        const resp = await fetch(
+          `${commentServer}/v1/threads/${encodeURIComponent(c.$threadId)}/nicorus`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Frontend-Id": "6",
+              "X-Frontend-Version": "0",
+              "X-Request-With": "https://www.nicovideo.jp",
+            },
+            credentials: "omit",
+            body: JSON.stringify({
+              videoId: currentVideoId,
+              fork: c.$fork,
+              no: c.no,
+              content: c.body,
+              nicoruKey: nicoruKey,
+            }),
+          }
+        );
+        if (!resp.ok) throw new Error(`Nicoru failed: ${resp.status}`);
+        const data = await resp.json();
+        c.nicoruId = (data.data && data.data.nicoruId) || true;
+        c.nicoruCount = (c.nicoruCount || 0) + 1;
+      }
+
+      // Update button state
+      btn.innerHTML = "";
+      btn.appendChild(createNicoruIcon("small", !!c.nicoruId));
+      console.log("[NicoSideComment] Nicoru toggled");
+    } catch (err) {
+      console.error("[NicoSideComment] Nicoru error:", err);
+    }
+  }
+
+  async function addCommentNg(c) {
+    await addNg({ type: "word", source: c.body }, "コメントをNG登録しました");
+  }
+
+  async function addUserNg(c) {
+    if (!c.userId) return;
+    await addNg({ type: "id", source: c.userId }, "ユーザーをNG登録しました");
+  }
+
+  async function addNg(payload, successMsg) {
+    try {
+      // NG API lives on nvapi.nicovideo.jp (not the nvcomment server),
+      // which allows credentials: "include" via explicit ACAO.
+      const resp = await fetch(
+        `https://nvapi.nicovideo.jp/v1/users/me/ng-comments/client`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json;charset=utf-8",
+            "X-Frontend-Id": "6",
+            "X-Frontend-Version": "0",
+            "X-Request-With": "https://www.nicovideo.jp",
+          },
+          credentials: "include",
+          body: JSON.stringify({ targets: [payload] }),
+        }
+      );
+      if (!resp.ok) throw new Error(`NG failed: ${resp.status}`);
+      console.log("[NicoSideComment]", successMsg);
+    } catch (err) {
+      console.error("[NicoSideComment] NG error:", err);
+    }
+  }
+
+  function reportComment(c) {
+    // Niconico reports via a form POST to comment_allegation/{videoId}.
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = `https://www.nicovideo.jp/comment_allegation/${encodeURIComponent(
+      currentVideoId
+    )}`;
+    form.target = "_blank";
+    form.rel = "noopener";
+
+    const forkLabel =
+      c.$fork === "main"
+        ? "通常コメント"
+        : c.$fork === "owner"
+          ? "投稿者コメント"
+          : c.$fork === "easy"
+            ? "かんたんコメント"
+            : c.$fork;
+
+    const inquiry = [
+      `違反行為を行っているユーザーID： ${c.userId}`,
+      `コメント番号： ${c.no}`,
+      `コメント種別： ${forkLabel}`,
+      `コメント内容： ${c.body}`,
+      "違反と判断された理由：",
+    ].join("\n");
+
+    const addHidden = (name, value) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    };
+    addHidden("target", "comment");
+    addHidden("inquiry", inquiry);
+
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+    console.log("[NicoSideComment] Report submitted");
   }
 
   // ── Helpers ──────────────────────────────────────
