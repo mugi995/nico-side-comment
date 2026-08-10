@@ -15,6 +15,8 @@
   let toggleButtonObserver = null;
   let currentVideoId = null;
   let videoWatchInterval = null;
+  let autoScrollEnabled = true;
+  let scrollListenersAttached = false;
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -352,6 +354,10 @@
 
     overlay.style.display = "none";
 
+    autoScrollEnabled = true;
+    hideResumePopup();
+    attachScrollListeners();
+
     injectToggleButton();
     startToggleButtonWatch();
 
@@ -362,6 +368,10 @@
     stopTimecodeSync();
     stopToggleButtonWatch();
     removeToggleButton();
+
+    detachScrollListeners();
+    hideResumePopup();
+    autoScrollEnabled = true;
 
     if (fullscreenTarget) {
       fullscreenTarget.style.right = "";
@@ -531,7 +541,9 @@
 
       if (bestEl && bestDelta < 10000) {
         bestEl.classList.add("nsc-active-comment");
-        bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (autoScrollEnabled) {
+          bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
       }
     }, 1000);
   }
@@ -541,6 +553,120 @@
       clearInterval(timecodeIntervalId);
       timecodeIntervalId = null;
     }
+  }
+
+  // ── Manual Scroll Detection & Resume Popup ──────
+  let scrollWheelHandler = null;
+  let scrollTouchHandler = null;
+  let scrollKeyHandler = null;
+
+  function attachScrollListeners() {
+    if (scrollListenersAttached) return;
+    if (!overlay) return;
+
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (!sc) return;
+
+    const disableAutoScroll = () => {
+      if (!autoScrollEnabled) return;
+      autoScrollEnabled = false;
+      showResumePopup();
+    };
+
+    scrollWheelHandler = disableAutoScroll;
+    scrollTouchHandler = disableAutoScroll;
+    scrollKeyHandler = (e) => {
+      if (
+        e.key === "PageUp" ||
+        e.key === "PageDown" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === "Home" ||
+        e.key === "End"
+      ) {
+        disableAutoScroll();
+      }
+    };
+
+    sc.addEventListener("wheel", scrollWheelHandler, { passive: true });
+    sc.addEventListener("touchstart", scrollTouchHandler, { passive: true });
+    sc.addEventListener("keydown", scrollKeyHandler);
+
+    scrollListenersAttached = true;
+  }
+
+  function detachScrollListeners() {
+    if (!scrollListenersAttached || !overlay) return;
+
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (sc) {
+      if (scrollWheelHandler) sc.removeEventListener("wheel", scrollWheelHandler);
+      if (scrollTouchHandler) sc.removeEventListener("touchstart", scrollTouchHandler);
+      if (scrollKeyHandler) sc.removeEventListener("keydown", scrollKeyHandler);
+    }
+    scrollWheelHandler = null;
+    scrollTouchHandler = null;
+    scrollKeyHandler = null;
+    scrollListenersAttached = false;
+  }
+
+  function showResumePopup() {
+    if (!overlay) return;
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (!sc) return;
+
+    // Remove existing popup
+    const old = sc.querySelector(".nsc-resume-popup");
+    if (old) old.remove();
+
+    const popup = document.createElement("button");
+    popup.type = "button";
+    popup.className = "nsc-resume-popup";
+    popup.textContent = "自動スクロールに戻る";
+    popup.addEventListener("click", (e) => {
+      e.stopPropagation();
+      resumeAutoScroll();
+    });
+
+    // Insert at the top of the scroll container
+    sc.insertBefore(popup, sc.firstChild);
+  }
+
+  function hideResumePopup() {
+    if (!overlay) return;
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (!sc) return;
+    const popup = sc.querySelector(".nsc-resume-popup");
+    if (popup) popup.remove();
+  }
+
+  function resumeAutoScroll() {
+    autoScrollEnabled = true;
+    hideResumePopup();
+
+    // Immediately scroll to the current time position
+    const video = document.querySelector('video[data-name="video-content"]');
+    if (!video || !overlay) return;
+    const currentMs = video.currentTime * 1000;
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (!sc) return;
+
+    const items = sc.querySelectorAll("[data-nsc-vpos-ms]");
+    let bestEl = null;
+    let bestDelta = Infinity;
+    for (const item of items) {
+      const t = parseInt(item.getAttribute("data-nsc-vpos-ms"), 10);
+      if (isNaN(t)) continue;
+      const delta = Math.abs(t - currentMs);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestEl = item;
+      }
+    }
+    if (bestEl) {
+      bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    console.log("[NicoSideComment] Auto-scroll resumed");
   }
 
   // ── Overlay Creation ────────────────────────────
@@ -570,6 +696,9 @@
     stopToggleButtonWatch();
     removeToggleButton();
     stopVideoWatch();
+    detachScrollListeners();
+    hideResumePopup();
+    autoScrollEnabled = true;
 
     const allOverlays = document.querySelectorAll(
       `#${OVERLAY_ID}, [data-nico-side-comment]`
