@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nico Side Comment",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "ニコニコ動画のフルスクリーン時にコメント欄をサイドバー表示します",
   "icons": {
     "16": "icons/icon16.png",
