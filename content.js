@@ -22,6 +22,7 @@
   let scrollListenersAttached = false;
   let commentElementMap = new Map(); // id (string) → rendered element, for O(1) NG removal
   let commentsFetchController = null; // in-flight fetch (aborted on video change / disable)
+  let itemElements = []; // rendered elements, aligned by index with commentsCache
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -86,6 +87,7 @@
 
     // Clear cached comments and the overlay content
     commentsCache = [];
+    itemElements = [];
     if (overlay) {
       const sc = overlay.querySelector(".nsc-scroll-container");
       if (sc) sc.innerHTML = "";
@@ -338,6 +340,7 @@
 
     // Rebuild the id → element registry for O(1) NG removal
     commentElementMap = new Map();
+    itemElements = [];
 
     if (commentsCache.length === 0) {
       sc.innerHTML =
@@ -358,6 +361,7 @@
         item.setAttribute("data-nsc-id", String(c.id));
         commentElementMap.set(String(c.id), item);
       }
+      itemElements.push(item);
 
       // ── Main column (body + meta) ──
       const main = document.createElement("div");
@@ -597,6 +601,7 @@
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => !x.body || !x.body.includes(needle));
     removeElementsByIds(targetIds);
+    rebuildItemElements();
   }
 
   async function addUserNg(c) {
@@ -609,6 +614,15 @@
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => x.userId !== c.userId);
     removeElementsByIds(targetIds);
+    rebuildItemElements();
+  }
+
+  // Rebuild the index-aligned element array from the registry after
+  // commentsCache changes (e.g. NG removal) so timecode sync stays aligned.
+  function rebuildItemElements() {
+    itemElements = commentsCache.map((c) =>
+      c.id ? commentElementMap.get(String(c.id)) || null : null
+    );
   }
 
   // Remove comment DOM elements by their data-nsc-id values.
@@ -1034,6 +1048,43 @@
   }
 
   // ── Timecode Sync ───────────────────────────────
+  // First index in commentsCache (sorted by vposMs) whose vposMs >= target.
+  function lowerBoundComment(target) {
+    const arr = commentsCache;
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid].vposMs < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // Nearest comment index to currentMs. On equal distance the earlier
+  // (lower index) comment wins, matching the old linear scan.
+  function findNearestCommentIndex(currentMs) {
+    if (commentsCache.length === 0) return -1;
+    const idx = lowerBoundComment(currentMs);
+    let bestIdx = -1;
+    let bestDelta = Infinity;
+    for (const cand of [idx - 1, idx]) {
+      if (cand < 0 || cand >= commentsCache.length) continue;
+      const delta = Math.abs(commentsCache[cand].vposMs - currentMs);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestIdx = cand;
+      }
+    }
+    return bestDelta < 10000 ? bestIdx : -1;
+  }
+
+  function scrollToCommentIndex(index) {
+    if (index < 0 || index >= itemElements.length) return;
+    const el = itemElements[index];
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
   function startTimecodeSync() {
     if (timecodeIntervalId) clearInterval(timecodeIntervalId);
 
@@ -1043,26 +1094,9 @@
       const video = document.querySelector('video[data-name="video-content"]');
       if (!video) return;
 
-      const currentMs = video.currentTime * 1000;
-      const scrollContainer = overlay.querySelector(".nsc-scroll-container");
-      if (!scrollContainer) return;
-
-      const items = scrollContainer.querySelectorAll("[data-nsc-vpos-ms]");
-      let bestEl = null;
-      let bestDelta = Infinity;
-
-      for (const item of items) {
-        const t = parseInt(item.getAttribute("data-nsc-vpos-ms"), 10);
-        if (isNaN(t)) continue;
-        const delta = Math.abs(t - currentMs);
-        if (delta < bestDelta) {
-          bestDelta = delta;
-          bestEl = item;
-        }
-      }
-
-      if (bestEl && bestDelta < 10000 && autoScrollEnabled) {
-        bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (autoScrollEnabled) {
+        const idx = findNearestCommentIndex(video.currentTime * 1000);
+        scrollToCommentIndex(idx);
       }
     }, 1000);
   }
@@ -1166,25 +1200,7 @@
     // Immediately scroll to the current time position
     const video = document.querySelector('video[data-name="video-content"]');
     if (!video || !overlay) return;
-    const currentMs = video.currentTime * 1000;
-    const sc = overlay.querySelector(".nsc-scroll-container");
-    if (!sc) return;
-
-    const items = sc.querySelectorAll("[data-nsc-vpos-ms]");
-    let bestEl = null;
-    let bestDelta = Infinity;
-    for (const item of items) {
-      const t = parseInt(item.getAttribute("data-nsc-vpos-ms"), 10);
-      if (isNaN(t)) continue;
-      const delta = Math.abs(t - currentMs);
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        bestEl = item;
-      }
-    }
-    if (bestEl) {
-      bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
+    scrollToCommentIndex(findNearestCommentIndex(video.currentTime * 1000));
     console.log("[NicoSideComment] Auto-scroll resumed");
   }
 
@@ -1257,6 +1273,7 @@
     allOverlays.forEach((el) => el.remove());
     overlay = null;
     commentsCache = [];
+    itemElements = [];
   }
 
   // ── Init ─────────────────────────────────────────
