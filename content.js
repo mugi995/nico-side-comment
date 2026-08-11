@@ -21,6 +21,7 @@
   let autoScrollEnabled = true;
   let scrollListenersAttached = false;
   let commentElementMap = new Map(); // id (string) → rendered element, for O(1) NG removal
+  let commentsFetchController = null; // in-flight fetch (aborted on video change / disable)
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -28,7 +29,6 @@
     enabled = data[STORAGE_KEY] !== false;
     if (enabled) {
       startWatching();
-      startFetchComments();
       startVideoWatch();
     }
   }
@@ -41,7 +41,7 @@
       enabled = msg.enabled;
       if (enabled) {
         startWatching();
-        startFetchComments();
+        startVideoWatch();
       } else {
         stopWatching();
         destroyOverlay();
@@ -81,6 +81,9 @@
   }
 
   function resetForVideoChange() {
+    // Cancel any in-flight fetch for the previous video
+    if (commentsFetchController) commentsFetchController.abort();
+
     // Clear cached comments and the overlay content
     commentsCache = [];
     if (overlay) {
@@ -88,8 +91,11 @@
       if (sc) sc.innerHTML = "";
     }
 
-    // Fetch comments for the new video
-    startFetchComments();
+    // Fetch only while the sidebar is visible; otherwise defer to the next
+    // sidebar open (toggleSidebar).
+    if (sidebarVisible) {
+      startFetchComments();
+    }
   }
 
   // ── Fullscreen Detection ────────────────────────
@@ -136,9 +142,10 @@
   // ── Comment Fetching (API) ───────────────────────
   // Poll the React fiber tree for the player's own nvComment config
   // (primary source; its threadKey is fetched by the player already).
-  async function waitForNvComment(timeoutMs, intervalMs) {
+  async function waitForNvComment(timeoutMs, intervalMs, signal) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal && signal.aborted) return null;
       const nv = findNvComment();
       if (nv && nv.threadKey && nv.params) return nv;
       await sleep(intervalMs);
@@ -189,6 +196,12 @@
     const videoId = window.location.pathname.split("/").pop();
     console.log("[NicoSideComment] Fetching comments for", videoId);
 
+    // Cancel any previous in-flight fetch (rapid toggles / video changes)
+    if (commentsFetchController) commentsFetchController.abort();
+    const controller = new AbortController();
+    commentsFetchController = controller;
+    const signal = controller.signal;
+
     showLoading();
     const fetchStart = performance.now();
 
@@ -196,13 +209,16 @@
       // Step 1+2: Race the React fiber search (primary) against the
       // keys/thread API fallback. On so videos the fiber search always
       // fails, so without this the fallback waited up to 5s before starting.
-      const abort = new AbortController();
-      const apiPromise = fetchThreadKeyByApi(videoId, abort.signal).catch(() => null);
+      const raceAbort = new AbortController();
+      // Cancel the keys request when the fiber search wins, or when the
+      // whole fetch is aborted (video change / disable).
+      signal.addEventListener("abort", () => raceAbort.abort());
+      const apiPromise = fetchThreadKeyByApi(videoId, raceAbort.signal).catch(() => null);
       const result = await Promise.race([
-        waitForNvComment(5000, 500),
+        waitForNvComment(5000, 500, signal),
         apiPromise,
       ]);
-      abort.abort(); // cancel the API request if the fiber search won
+      raceAbort.abort(); // cancel the API request if the fiber search won
 
       if (!result) throw new Error("No comment source available");
 
@@ -226,6 +242,7 @@
           threadKey: threadKey,
           additionals: {},
         }),
+        signal: signal,
       });
       if (!commentResp.ok) throw new Error(`Comment fetch failed: ${commentResp.status}`);
 
@@ -261,6 +278,9 @@
         "ms"
       );
     } catch (err) {
+      // Cancelled (video change / extension disabled): stay quiet — the
+      // replacement fetch owns the spinner and error UI.
+      if (signal.aborted) return;
       console.error("[NicoSideComment] Comment fetch error:", err);
       hideLoading();
 
@@ -273,6 +293,8 @@
             '<div style="padding:16px;color:rgba(255,255,255,0.5);text-align:center;">コメントの読み込みに失敗しました</div>';
         }
       }
+    } finally {
+      if (commentsFetchController === controller) commentsFetchController = null;
     }
   }
 
@@ -713,18 +735,14 @@
     fullscreenTarget = target;
     console.log("[NicoSideComment] enterFullscreenMode, target:", fullscreenTarget);
 
-    // If comments were not fetched yet (e.g. page loaded before player data),
-    // retry fetching now.
-    if (commentsCache.length === 0) {
-      startFetchComments();
-    }
-
-    // Sidebar is hidden by default; video fills the whole screen
+    // Sidebar is hidden by default; video fills the whole screen.
+    // Comments are fetched lazily when the sidebar is first shown.
     sidebarVisible = false;
 
     if (!overlay) {
-      renderComments();
-      if (!overlay) return;
+      // Create the (hidden) overlay without rendering the empty-state
+      // message; comments appear when the sidebar is first shown.
+      ensureOverlay();
     }
 
     overlay.style.display = "none";
@@ -859,6 +877,11 @@
 
     if (sidebarVisible) {
       applyPanelShift();
+      // Deferred fetch: load comments only when the sidebar is first shown
+      // (saves 10+ MB of transfers for users who never open it).
+      if (commentsCache.length === 0 && !commentsFetchController) {
+        startFetchComments();
+      }
     } else {
       removePanelShift();
     }
@@ -1216,6 +1239,9 @@
 
   // ── Cleanup ─────────────────────────────────────
   function destroyOverlay() {
+    // Cancel any in-flight comment fetch
+    if (commentsFetchController) commentsFetchController.abort();
+
     stopTimecodeSync();
     stopToggleButtonWatch();
     removeToggleButton();
