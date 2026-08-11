@@ -14,7 +14,8 @@
   let sidebarVisible = false;
   let toggleButtonObserver = null;
   let panelShiftObserver = null;
-  let panelBootObserver = null;
+  let panelShiftInterval = null;
+  let observedPanelEl = null;
   let commentServer = DEFAULT_SERVER;
   let currentVideoId = null;
   let videoWatchInterval = null;
@@ -955,67 +956,77 @@
   // a higher-specificity selector, so a plain CSS rule cannot override it,
   // and a non-important inline style loses to that !important rule. We must
   // force inline !important via setProperty(), and re-apply it whenever
-  // floating-ui rewrites the panel's style (observed via attributes).
+  // floating-ui rewrites the panel's style.
+  //
+  // The panel element is recreated each time the settings dialog opens
+  // (React unmount/remount), so a direct MutationObserver alone is not
+  // enough: a stale observer never fires again. A cheap 1s interval checks
+  // the element identity and re-attaches the observer when it changes.
+  const PANEL_SHIFT_RECHECK_MS = 1000;
+
+  const shiftPanel = () => {
+    document
+      .querySelectorAll(
+        '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+      )
+      .forEach((el) => {
+        el.style.setProperty("left", "auto", "important");
+        el.style.setProperty("right", "340px", "important");
+      });
+  };
+
+  // Attach the direct (cheap) observer to the given panel element.
+  function attachPanelObserver(panel) {
+    if (panelShiftObserver) {
+      panelShiftObserver.disconnect();
+      panelShiftObserver = null;
+    }
+    panelShiftObserver = new MutationObserver(shiftPanel);
+    panelShiftObserver.observe(panel, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+  }
+
   function applyPanelShift() {
-    if (panelShiftObserver || panelBootObserver) return;
+    if (panelShiftInterval) return;
 
-    const shiftPanel = () => {
-      document
-        .querySelectorAll(
-          '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
-        )
-        .forEach((el) => {
-          el.style.setProperty("left", "auto", "important");
-          el.style.setProperty("right", "340px", "important");
-        });
-    };
-
-    shiftPanel();
-
-    // Observe only the floating panel element itself (style attribute changes
-    // from floating-ui). Previously document.body was watched with
-    // childList + subtree, firing on every DOM/style change across the page
-    // (seek bar, time display, controller updates).
     const panel = document.querySelector(
       '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
     );
     if (panel) {
-      panelShiftObserver = new MutationObserver(shiftPanel);
-      panelShiftObserver.observe(panel, {
-        attributes: true,
-        attributeFilter: ["style"],
-      });
-      return;
+      observedPanelEl = panel;
+      attachPanelObserver(panel);
     }
 
-    // Panel is not rendered yet: watch the body only until it appears, then
-    // switch to the direct (cheap) observation above.
-    panelBootObserver = new MutationObserver(() => {
+    // Recheck while the sidebar is visible: handles both the first
+    // appearance and recreations of the panel element.
+    panelShiftInterval = setInterval(() => {
       const el = document.querySelector(
         '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
       );
-      if (!el) return;
-      panelBootObserver.disconnect();
-      panelBootObserver = null;
-      shiftPanel();
-      panelShiftObserver = new MutationObserver(shiftPanel);
-      panelShiftObserver.observe(el, {
-        attributes: true,
-        attributeFilter: ["style"],
-      });
-    });
-    panelBootObserver.observe(document.body, { childList: true, subtree: true });
+      if (!el) {
+        observedPanelEl = null;
+        return;
+      }
+      if (el !== observedPanelEl) {
+        observedPanelEl = el;
+        attachPanelObserver(el);
+      }
+      shiftPanel(); // idempotent; re-applies if floating-ui rewrote the style
+    }, PANEL_SHIFT_RECHECK_MS);
   }
 
   function removePanelShift() {
-    if (panelBootObserver) {
-      panelBootObserver.disconnect();
-      panelBootObserver = null;
+    if (panelShiftInterval) {
+      clearInterval(panelShiftInterval);
+      panelShiftInterval = null;
     }
     if (panelShiftObserver) {
       panelShiftObserver.disconnect();
       panelShiftObserver = null;
     }
+    observedPanelEl = null;
     document
       .querySelectorAll(
         '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
