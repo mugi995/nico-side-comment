@@ -87,7 +87,7 @@
 
     // Clear cached comments and the overlay content
     commentsCache = [];
-    itemElements = [];
+    resetVirtualList();
     if (overlay) {
       const sc = overlay.querySelector(".nsc-scroll-container");
       if (sc) sc.innerHTML = "";
@@ -329,18 +329,176 @@
     return null;
   }
 
-  // ── Comment Rendering ────────────────────────────
-  function renderComments() {
-    if (!ensureOverlay()) return;
-    const renderStart = performance.now();
+  // ── Virtual List ─────────────────────────────────
+  // Only the visible window of comments (+ buffer) is rendered as DOM.
+  // Item heights are variable (multi-line bodies), so we keep a measured
+  // height per index and correct the offsets after each render pass.
+  const VLIST_ESTIMATE = 60; // default height until measured (px)
+  const VLIST_TOP_PAD = 12; // matches the old container padding
+  const VLIST_BOTTOM_PAD = 80; // space below the last item
+  const VLIST_BUFFER = 10; // overscan items on each side
+  let vlist = {
+    heights: [], // measured (or estimated) height per index
+    offsets: [], // prefix sums: offsets[i] = height of items [0..i-1]
+    totalHeight: 0,
+    spacer: null, // .nsc-vlist-spacer element (sets the scrollable height)
+    windowStart: -1,
+    windowEnd: -1,
+  };
+  let scrollRenderRaf = null;
 
+  function resetVirtualList() {
+    vlist.heights = [];
+    vlist.offsets = [];
+    vlist.totalHeight = 0;
+    vlist.spacer = null;
+    vlist.windowStart = -1;
+    vlist.windowEnd = -1;
+    itemElements = [];
+  }
+
+  // First index whose offset is >= x (binary search over offsets[]).
+  function lowerBoundOffset(x) {
+    const offsets = vlist.offsets;
+    let lo = 0;
+    let hi = offsets.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (offsets[mid] < x) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // Recompute offsets from startIdx onward (after a measured height change)
+  // and update the spacer's scrollable height.
+  function recomputeOffsetsFrom(startIdx) {
+    const offsets = vlist.offsets;
+    const heights = vlist.heights;
+    let acc = startIdx === 0 ? 0 : offsets[startIdx];
+    for (let i = startIdx; i < offsets.length; i++) {
+      offsets[i] = acc;
+      acc += heights[i];
+    }
+    vlist.totalHeight = acc;
+    if (vlist.spacer) {
+      vlist.spacer.style.height =
+        acc + VLIST_TOP_PAD + VLIST_BOTTOM_PAD + "px";
+    }
+  }
+
+  // Build the DOM for one comment item (no absolute positioning / registry).
+  function buildCommentItem(c) {
+    const item = document.createElement("div");
+    item.className = "nsc-comment-item";
+    item.setAttribute("data-nsc-vpos-ms", String(c.vposMs));
+    item.setAttribute("data-nsc-time", formatVpos(c.vposMs));
+    if (c.id) item.setAttribute("data-nsc-id", String(c.id));
+
+    // ── Main column (body + meta) ──
+    const main = document.createElement("div");
+    main.className = "nsc-comment-main";
+
+    const body = document.createElement("div");
+    body.className = "nsc-comment-body";
+    body.textContent = c.body;
+    main.appendChild(body);
+
+    const meta = document.createElement("div");
+    meta.className = "nsc-comment-meta";
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "nsc-comment-time";
+    timeSpan.textContent = formatVpos(c.vposMs);
+    meta.appendChild(timeSpan);
+
+    if (c.nicoruCount > 0) {
+      const nicoru = document.createElement("span");
+      nicoru.className = "nsc-comment-nicoru";
+      nicoru.appendChild(createNicoruIcon("small"));
+      nicoru.appendChild(document.createTextNode(" " + c.nicoruCount));
+      meta.appendChild(nicoru);
+    }
+
+    const postedSpan = document.createElement("span");
+    postedSpan.className = "nsc-comment-date";
+    postedSpan.textContent = formatDate(c.postedAt);
+    meta.appendChild(postedSpan);
+
+    main.appendChild(meta);
+    item.appendChild(main);
+
+    // ── Nicoru button (right side, always visible) ──
+    const nicoruBtn = document.createElement("button");
+    nicoruBtn.type = "button";
+    nicoruBtn.className = "nsc-nicoru-btn";
+    nicoruBtn.title = "ニコる";
+    nicoruBtn.appendChild(createNicoruIcon("small", !!c.nicoruId));
+    nicoruBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleNicoru(c, nicoruBtn);
+    });
+    item.appendChild(nicoruBtn);
+
+    // ── Hover menu (seek / report / NG) ──
+    const menu = document.createElement("div");
+    menu.className = "nsc-hover-menu";
+
+    const menuItems = [
+      {
+        label: "▶ この時間に移動",
+        handler: () => seekToComment(c),
+      },
+      {
+        label: "⚑ 通報",
+        handler: () => reportComment(c),
+      },
+      {
+        label: "NG このコメントをNG",
+        handler: () => addCommentNg(c),
+      },
+      {
+        label: "NG このユーザーをNG",
+        handler: () => addUserNg(c),
+      },
+    ];
+    for (const mi of menuItems) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "nsc-hover-menu-item";
+      btn.textContent = mi.label;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        mi.handler();
+        // Close menu after action
+        item.classList.remove("nsc-menu-open");
+      });
+      menu.appendChild(btn);
+    }
+
+    item.appendChild(menu);
+
+    // Click to toggle action menu
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = item.classList.contains("nsc-menu-open");
+      closeAllCommentMenus();
+      if (!isOpen) {
+        item.classList.add("nsc-menu-open");
+      }
+    });
+
+    return item;
+  }
+
+  // (Re)build the virtual list after commentsCache changes. Optionally
+  // preserves the current scroll position (e.g. after NG removal).
+  function rebuildVirtualList(preserveScrollTop) {
     const sc = overlay.querySelector(".nsc-scroll-container");
     if (!sc) return;
-    sc.innerHTML = "";
 
-    // Rebuild the id → element registry for O(1) NG removal
-    commentElementMap = new Map();
-    itemElements = [];
+    const prevTop = preserveScrollTop ? sc.scrollTop : 0;
+    resetVirtualList();
 
     if (commentsCache.length === 0) {
       sc.innerHTML =
@@ -348,122 +506,123 @@
       return;
     }
 
-    // Build all items in a DocumentFragment first so the container is
-    // reflowed only once instead of once per comment.
-    const fragment = document.createDocumentFragment();
+    sc.innerHTML = "";
 
-    for (const c of commentsCache) {
-      const item = document.createElement("div");
-      item.className = "nsc-comment-item";
-      item.setAttribute("data-nsc-vpos-ms", String(c.vposMs));
-      item.setAttribute("data-nsc-time", formatVpos(c.vposMs));
-      if (c.id) {
-        item.setAttribute("data-nsc-id", String(c.id));
-        commentElementMap.set(String(c.id), item);
-      }
-      itemElements.push(item);
+    const n = commentsCache.length;
+    vlist.heights = new Array(n).fill(VLIST_ESTIMATE);
+    vlist.offsets = new Array(n);
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+      vlist.offsets[i] = acc;
+      acc += vlist.heights[i];
+    }
+    vlist.totalHeight = acc;
+    itemElements = new Array(n).fill(null);
 
-      // ── Main column (body + meta) ──
-      const main = document.createElement("div");
-      main.className = "nsc-comment-main";
+    const spacer = document.createElement("div");
+    spacer.className = "nsc-vlist-spacer";
+    spacer.style.position = "relative";
+    spacer.style.width = "100%";
+    spacer.style.height = acc + VLIST_TOP_PAD + VLIST_BOTTOM_PAD + "px";
+    sc.appendChild(spacer);
+    vlist.spacer = spacer;
 
-      const body = document.createElement("div");
-      body.className = "nsc-comment-body";
-      body.textContent = c.body;
-      main.appendChild(body);
+    sc.scrollTop = Math.min(prevTop, Math.max(0, sc.scrollHeight - sc.clientHeight));
+    renderWindow(true);
+  }
 
-      const meta = document.createElement("div");
-      meta.className = "nsc-comment-meta";
+  // Render the window of comments visible around the current scroll position.
+  function renderWindow(force) {
+    if (!overlay || !vlist.spacer) return;
+    const sc = overlay.querySelector(".nsc-scroll-container");
+    if (!sc) return;
+    const n = commentsCache.length;
+    if (n === 0) return;
 
-      const timeSpan = document.createElement("span");
-      timeSpan.className = "nsc-comment-time";
-      timeSpan.textContent = formatVpos(c.vposMs);
-      meta.appendChild(timeSpan);
+    const viewTop = sc.scrollTop;
+    const viewH = sc.clientHeight || 1;
+    const start = Math.max(0, lowerBoundOffset(viewTop) - VLIST_BUFFER);
+    const end = Math.min(n - 1, lowerBoundOffset(viewTop + viewH) + VLIST_BUFFER);
 
-      if (c.nicoruCount > 0) {
-        const nicoru = document.createElement("span");
-        nicoru.className = "nsc-comment-nicoru";
-        nicoru.appendChild(createNicoruIcon("small"));
-        nicoru.appendChild(document.createTextNode(" " + c.nicoruCount));
-        meta.appendChild(nicoru);
-      }
+    if (!force && start === vlist.windowStart && end === vlist.windowEnd) return;
 
-      const postedSpan = document.createElement("span");
-      postedSpan.className = "nsc-comment-date";
-      postedSpan.textContent = formatDate(c.postedAt);
-      meta.appendChild(postedSpan);
-
-      main.appendChild(meta);
-      item.appendChild(main);
-
-      // ── Nicoru button (right side, always visible) ──
-      const nicoruBtn = document.createElement("button");
-      nicoruBtn.type = "button";
-      nicoruBtn.className = "nsc-nicoru-btn";
-      nicoruBtn.title = "ニコる";
-      nicoruBtn.appendChild(createNicoruIcon("small", !!c.nicoruId));
-      nicoruBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        toggleNicoru(c, nicoruBtn);
-      });
-      item.appendChild(nicoruBtn);
-
-      // ── Hover menu (seek / report / NG) ──
-      const menu = document.createElement("div");
-      menu.className = "nsc-hover-menu";
-
-      const menuItems = [
-        {
-          label: "▶ この時間に移動",
-          handler: () => seekToComment(c),
-        },
-        {
-          label: "⚑ 通報",
-          handler: () => reportComment(c),
-        },
-        {
-          label: "NG このコメントをNG",
-          handler: () => addCommentNg(c),
-        },
-        {
-          label: "NG このユーザーをNG",
-          handler: () => addUserNg(c),
-        },
-      ];
-      for (const mi of menuItems) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "nsc-hover-menu-item";
-        btn.textContent = mi.label;
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          mi.handler();
-          // Close menu after action
-          item.classList.remove("nsc-menu-open");
-        });
-        menu.appendChild(btn);
-      }
-
-      item.appendChild(menu);
-
-      // Click to toggle action menu
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const isOpen = item.classList.contains("nsc-menu-open");
-        closeAllCommentMenus();
-        if (!isOpen) {
-          item.classList.add("nsc-menu-open");
-        }
-      });
-
-      fragment.appendChild(item);
+    // Clear the previous window's slots (itemElements persists across renders)
+    for (let i = vlist.windowStart; i <= vlist.windowEnd; i++) {
+      if (itemElements[i]) itemElements[i] = null;
     }
 
-    sc.appendChild(fragment);
+    const spacer = vlist.spacer;
+    spacer.innerHTML = "";
+    commentElementMap = new Map();
+
+    const fragment = document.createDocumentFragment();
+    for (let i = start; i <= end; i++) {
+      const c = commentsCache[i];
+      const item = buildCommentItem(c);
+      item.style.position = "absolute";
+      item.style.top = vlist.offsets[i] + VLIST_TOP_PAD + "px";
+      item.style.left = "0";
+      item.style.right = "0";
+      if (c.id) commentElementMap.set(String(c.id), item);
+      itemElements[i] = item;
+      fragment.appendChild(item);
+    }
+    spacer.appendChild(fragment);
+
+    // Measure actual heights and correct offsets + positions of the window
+    let firstChanged = -1;
+    for (let i = start; i <= end; i++) {
+      const el = itemElements[i];
+      if (!el) continue;
+      const h = el.offsetHeight;
+      if (h !== vlist.heights[i]) {
+        vlist.heights[i] = h;
+        if (firstChanged === -1) firstChanged = i;
+      }
+    }
+    if (firstChanged !== -1) {
+      recomputeOffsetsFrom(firstChanged);
+      for (let i = Math.max(start, firstChanged); i <= end; i++) {
+        const el = itemElements[i];
+        if (el) el.style.top = vlist.offsets[i] + VLIST_TOP_PAD + "px";
+      }
+    }
+
+    vlist.windowStart = start;
+    vlist.windowEnd = end;
+  }
+
+  // rAF-throttled scroll handler for the scroll container
+  function onScrollContainer() {
+    if (scrollRenderRaf) return;
+    scrollRenderRaf = requestAnimationFrame(() => {
+      scrollRenderRaf = null;
+      renderWindow();
+    });
+  }
+
+  // Window resize may change wrapping → invalidate measured heights of the
+  // current window by forcing a re-render (they are re-measured then).
+  function onViewportResize() {
+    if (!overlay || overlay.style.display === "none") return;
+    if (!vlist.spacer) return;
+    renderWindow(true);
+  }
+
+  window.addEventListener("resize", onViewportResize);
+
+  // ── Comment Rendering ────────────────────────────
+  function renderComments() {
+    if (!ensureOverlay()) return;
+    const renderStart = performance.now();
+
+    rebuildVirtualList(false);
     console.log(
       "[NicoSideComment] Render",
       commentsCache.length,
-      "comments:",
+      "comments (window",
+      Math.max(0, vlist.windowEnd - vlist.windowStart + 1),
+      "):",
       Math.round(performance.now() - renderStart),
       "ms"
     );
@@ -601,7 +760,7 @@
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => !x.body || !x.body.includes(needle));
     removeElementsByIds(targetIds);
-    rebuildItemElements();
+    rebuildVirtualList(true); // preserve scroll position
   }
 
   async function addUserNg(c) {
@@ -614,19 +773,11 @@
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => x.userId !== c.userId);
     removeElementsByIds(targetIds);
-    rebuildItemElements();
-  }
-
-  // Rebuild the index-aligned element array from the registry after
-  // commentsCache changes (e.g. NG removal) so timecode sync stays aligned.
-  function rebuildItemElements() {
-    itemElements = commentsCache.map((c) =>
-      c.id ? commentElementMap.get(String(c.id)) || null : null
-    );
+    rebuildVirtualList(true); // preserve scroll position
   }
 
   // Remove comment DOM elements by their data-nsc-id values.
-  // Uses the id → element registry built by renderComments() so removal is
+  // Uses the id → element registry built by renderWindow() so removal is
   // O(1) per id instead of a full querySelectorAll scan per id.
   function removeElementsByIds(ids) {
     for (const id of ids) {
@@ -1079,10 +1230,58 @@
     return bestDelta < 10000 ? bestIdx : -1;
   }
 
+  // Scroll the container so that comment `index` is vertically centered.
+  // Works with the virtual list: position is computed from offsets[], and
+  // snapAfterScrollTo() corrects the final position after measuring.
   function scrollToCommentIndex(index) {
-    if (index < 0 || index >= itemElements.length) return;
-    const el = itemElements[index];
-    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (index < 0 || index >= commentsCache.length) return;
+    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
+    if (!sc || !vlist.spacer) return;
+
+    const targetTop =
+      vlist.offsets[index] +
+      VLIST_TOP_PAD -
+      (sc.clientHeight - vlist.heights[index]) / 2;
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const clamped = Math.max(0, Math.min(targetTop, maxTop));
+
+    if (Math.abs(sc.scrollTop - clamped) > 2) {
+      sc.scrollTo({ top: clamped, behavior: "smooth" });
+      snapAfterScrollTo(index);
+    }
+  }
+
+  // After a smooth scroll lands, re-measure the window and snap to the item's
+  // actual (measured) center position. If the target is not rendered yet
+  // (long-distance scroll still in flight), re-request the scroll once.
+  function snapAfterScrollTo(index) {
+    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
+    if (!sc) return;
+    let done = false;
+    let retried = false;
+    const snap = () => {
+      if (done) return;
+      done = true;
+      sc.removeEventListener("scrollend", snap);
+      renderWindow();
+      const el = itemElements[index];
+      if (!el) {
+        if (!retried) {
+          retried = true;
+          scrollToCommentIndex(index);
+        }
+        return;
+      }
+      const actual =
+        el.offsetTop - (sc.clientHeight - el.offsetHeight) / 2;
+      const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      const clamped = Math.max(0, Math.min(actual, maxTop));
+      if (Math.abs(sc.scrollTop - clamped) > 2) {
+        sc.scrollTo({ top: clamped, behavior: "auto" });
+      }
+    };
+    sc.addEventListener("scrollend", snap);
+    setTimeout(snap, 1200); // fallback when scrollend does not fire
   }
 
   function startTimecodeSync() {
@@ -1165,11 +1364,9 @@
 
   function showResumePopup() {
     if (!overlay) return;
-    const sc = overlay.querySelector(".nsc-scroll-container");
-    if (!sc) return;
 
     // Remove existing popup
-    const old = sc.querySelector(".nsc-resume-popup");
+    const old = overlay.querySelector(".nsc-resume-popup");
     if (old) old.remove();
 
     const popup = document.createElement("button");
@@ -1181,15 +1378,14 @@
       resumeAutoScroll();
     });
 
-    // Insert at the top of the scroll container
-    sc.insertBefore(popup, sc.firstChild);
+    // Absolute-positioned sibling of the scroll container (the virtual list
+    // owns the container's children, so the popup cannot live inside it).
+    overlay.appendChild(popup);
   }
 
   function hideResumePopup() {
     if (!overlay) return;
-    const sc = overlay.querySelector(".nsc-scroll-container");
-    if (!sc) return;
-    const popup = sc.querySelector(".nsc-resume-popup");
+    const popup = overlay.querySelector(".nsc-resume-popup");
     if (popup) popup.remove();
   }
 
@@ -1222,6 +1418,10 @@
     const scrollContainer = document.createElement("div");
     scrollContainer.className = "nsc-scroll-container";
     el.appendChild(scrollContainer);
+
+    // Re-render the virtual list window while scrolling (rAF-throttled).
+    // The listener dies with the overlay; no explicit cleanup needed.
+    scrollContainer.addEventListener("scroll", onScrollContainer, { passive: true });
 
     return el;
   }
@@ -1273,7 +1473,7 @@
     allOverlays.forEach((el) => el.remove());
     overlay = null;
     commentsCache = [];
-    itemElements = [];
+    resetVirtualList();
   }
 
   // ── Init ─────────────────────────────────────────
