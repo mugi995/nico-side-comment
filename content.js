@@ -136,6 +136,8 @@
     const videoId = window.location.pathname.split("/").pop();
     console.log("[NicoSideComment] Fetching comments for", videoId);
 
+    showLoading();
+
     try {
       // Step 1: Get nvComment config from React context (primary)
       // The player's own comment request uses this exact data.
@@ -228,8 +230,20 @@
 
       // Step 5: Render into overlay
       renderComments();
+      hideLoading();
     } catch (err) {
       console.error("[NicoSideComment] Comment fetch error:", err);
+      hideLoading();
+
+      // Show an error message only if we have nothing to display yet
+      // (do not wipe already-loaded comments on a failed re-fetch).
+      if (commentsCache.length === 0 && overlay) {
+        const sc = overlay.querySelector(".nsc-scroll-container");
+        if (sc) {
+          sc.innerHTML =
+            '<div style="padding:16px;color:rgba(255,255,255,0.5);text-align:center;">コメントの読み込みに失敗しました</div>';
+        }
+      }
     }
   }
 
@@ -264,11 +278,7 @@
 
   // ── Comment Rendering ────────────────────────────
   function renderComments() {
-    if (!overlay) {
-      overlay = createOverlay();
-      overlay.style.display = "none";
-      document.body.appendChild(overlay);
-    }
+    if (!ensureOverlay()) return;
 
     const sc = overlay.querySelector(".nsc-scroll-container");
     if (!sc) return;
@@ -946,15 +956,8 @@
         }
       }
 
-      scrollContainer.querySelectorAll(".nsc-active-comment").forEach(
-        (el) => el.classList.remove("nsc-active-comment")
-      );
-
-      if (bestEl && bestDelta < 10000) {
-        bestEl.classList.add("nsc-active-comment");
-        if (autoScrollEnabled) {
-          bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
+      if (bestEl && bestDelta < 10000 && autoScrollEnabled) {
+        bestEl.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     }, 1000);
   }
@@ -1089,11 +1092,39 @@
     el.setAttribute("data-nico-side-comment", "true");
     el.setAttribute("data-nvpc-scope", "watch-floating-panel");
 
+    // Loading spinner (hidden until showLoading())
+    const loading = document.createElement("div");
+    loading.className = "nsc-loading";
+    loading.style.display = "none";
+    el.appendChild(loading);
+
     const scrollContainer = document.createElement("div");
     scrollContainer.className = "nsc-scroll-container";
     el.appendChild(scrollContainer);
 
     return el;
+  }
+
+  // Create the overlay if it does not exist yet, without showing it.
+  function ensureOverlay() {
+    if (overlay) return true;
+    overlay = createOverlay();
+    overlay.style.display = "none";
+    document.body.appendChild(overlay);
+    return true;
+  }
+
+  // ── Loading Spinner ──────────────────────────────
+  function showLoading() {
+    if (!ensureOverlay()) return;
+    const l = overlay.querySelector(".nsc-loading");
+    if (l) l.style.display = "flex";
+  }
+
+  function hideLoading() {
+    if (!overlay) return;
+    const l = overlay.querySelector(".nsc-loading");
+    if (l) l.style.display = "none";
   }
 
   function removeStaleOverlays() {
