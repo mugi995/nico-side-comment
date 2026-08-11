@@ -8,8 +8,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "scripting"],
-  "host_permissions": ["*://www.nicovideo.jp/*"],
+  "permissions": ["storage"],
   "background": {
     "service_worker": "background.js"
   },
