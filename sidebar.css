@@ -17,15 +17,26 @@
 }
 
 /* ── Scroll Container ───────────────────────────── */
+/* Padding is provided by the virtual list (VLIST_TOP_PAD/BOTTOM_PAD);
+   items are absolutely positioned inside .nsc-vlist-spacer. */
 #nico-side-comment-overlay .nsc-scroll-container {
   width: 100%;
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   box-sizing: border-box;
-  padding: 12px 12px 80px 12px;
+  padding: 0;
   background: rgba(0, 0, 0, 0.82);
   color: #f0f0f0;
+}
+
+/* ── Virtual List Spacer ────────────────────────── */
+/* Sets the scrollable height; comment items are absolutely positioned
+   inside it at computed offsets (content.js). */
+#nico-side-comment-overlay .nsc-scroll-container .nsc-vlist-spacer {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* ── Loading Spinner ─────────────────────────────── */
@@ -192,15 +203,19 @@
 }
 
 /* ── Auto-scroll Resume Popup ───────────────────── */
-#nico-side-comment-overlay .nsc-scroll-container .nsc-resume-popup {
-  position: sticky;
-  top: 0;
+/* Absolute-positioned sibling of the scroll container (top center).
+   Cannot be sticky inside the container: the virtual list owns its children. */
+#nico-side-comment-overlay .nsc-resume-popup {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10;
   display: block;
-  width: 100%;
+  width: auto;
+  max-width: calc(100% - 24px);
   box-sizing: border-box;
   padding: 8px 12px;
-  margin-bottom: 8px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   background: rgba(40, 40, 40, 0.95);
@@ -213,7 +228,7 @@
   transition: background 0.15s ease;
 }
 
-#nico-side-comment-overlay .nsc-scroll-container .nsc-resume-popup:hover {
+#nico-side-comment-overlay .nsc-resume-popup:hover {
   background: rgba(60, 60, 60, 0.95);
 }
 
