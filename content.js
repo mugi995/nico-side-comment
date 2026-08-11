@@ -14,11 +14,13 @@
   let sidebarVisible = false;
   let toggleButtonObserver = null;
   let panelShiftObserver = null;
+  let panelBootObserver = null;
   let commentServer = DEFAULT_SERVER;
   let currentVideoId = null;
   let videoWatchInterval = null;
   let autoScrollEnabled = true;
   let scrollListenersAttached = false;
+  let commentElementMap = new Map(); // id (string) → rendered element, for O(1) NG removal
 
   // ── Storage & Messaging ─────────────────────────
   async function initEnabled() {
@@ -132,59 +134,81 @@
   }
 
   // ── Comment Fetching (API) ───────────────────────
+  // Poll the React fiber tree for the player's own nvComment config
+  // (primary source; its threadKey is fetched by the player already).
+  async function waitForNvComment(timeoutMs, intervalMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const nv = findNvComment();
+      if (nv && nv.threadKey && nv.params) return nv;
+      await sleep(intervalMs);
+    }
+    return null;
+  }
+
+  // Fetch the thread key via the keys/thread API. Runs in parallel with the
+  // fiber search; the caller aborts it via `signal` when the fiber wins.
+  async function fetchThreadKeyByApi(videoId, signal) {
+    const keyUrl =
+      `https://nvapi.nicovideo.jp/v1/comment/keys/thread?videoId=${videoId}`;
+    const keyResp = await fetch(keyUrl, {
+      headers: {
+        "X-Frontend-Id": "6",
+        "X-Frontend-Version": "0",
+      },
+      credentials: "include",
+      signal: signal,
+    });
+    if (!keyResp.ok) throw new Error(`Thread key fetch failed: ${keyResp.status}`);
+    const keyJson = await keyResp.json();
+    const threadKey = keyJson.data.threadKey;
+
+    const payloadB64 = threadKey.split(".")[1];
+    const payload = JSON.parse(base64urlDecode(payloadB64));
+    const tids = payload.tids || [];
+    if (!tids.length) throw new Error("No thread ID in key");
+
+    // Include ALL thread IDs as targets.
+    // sm videos have a single tid; so/channel videos may have multiple
+    // (e.g. tids[0] = 0 comments, tids[1] = the real main thread).
+    return {
+      server: DEFAULT_SERVER,
+      threadKey: threadKey,
+      params: {
+        targets: tids.flatMap((tid) => [
+          { id: tid, fork: "owner" },
+          { id: tid, fork: "main" },
+          { id: tid, fork: "easy" },
+        ]),
+        language: "ja-jp",
+      },
+    };
+  }
+
   async function startFetchComments() {
     const videoId = window.location.pathname.split("/").pop();
     console.log("[NicoSideComment] Fetching comments for", videoId);
 
     showLoading();
+    const fetchStart = performance.now();
 
     try {
-      // Step 1: Get nvComment config from React context (primary)
-      // The player's own comment request uses this exact data.
-      let nvComment = null;
-      for (let i = 0; i < 10; i++) {
-        nvComment = findNvComment();
-        if (nvComment && nvComment.threadKey && nvComment.params) break;
-        await sleep(500);
-      }
+      // Step 1+2: Race the React fiber search (primary) against the
+      // keys/thread API fallback. On so videos the fiber search always
+      // fails, so without this the fallback waited up to 5s before starting.
+      const abort = new AbortController();
+      const apiPromise = fetchThreadKeyByApi(videoId, abort.signal).catch(() => null);
+      const result = await Promise.race([
+        waitForNvComment(5000, 500),
+        apiPromise,
+      ]);
+      abort.abort(); // cancel the API request if the fiber search won
 
-      let server = nvComment ? nvComment.server || DEFAULT_SERVER : DEFAULT_SERVER;
-      let threadKey = nvComment ? nvComment.threadKey : null;
-      let params = nvComment ? nvComment.params : null;
+      if (!result) throw new Error("No comment source available");
 
-      // Step 2: Fallback — fetch thread key via API if not available
-      if (!threadKey || !params) {
-        console.log("[NicoSideComment] nvComment not found, using keys/thread API");
-        const keyUrl =
-          `https://nvapi.nicovideo.jp/v1/comment/keys/thread?videoId=${videoId}`;
-        const keyResp = await fetch(keyUrl, {
-          headers: {
-            "X-Frontend-Id": "6",
-            "X-Frontend-Version": "0",
-          },
-          credentials: "include",
-        });
-        if (!keyResp.ok) throw new Error(`Thread key fetch failed: ${keyResp.status}`);
-        const keyJson = await keyResp.json();
-        threadKey = keyJson.data.threadKey;
-
-        const payloadB64 = threadKey.split(".")[1];
-        const payload = JSON.parse(base64urlDecode(payloadB64));
-        const tids = payload.tids || [];
-        if (!tids.length) throw new Error("No thread ID in key");
-
-        // Include ALL thread IDs as targets.
-        // sm videos have a single tid; so/channel videos may have multiple
-        // (e.g. tids[0] = 0 comments, tids[1] = the real main thread).
-        params = {
-          targets: tids.flatMap((tid) => [
-            { id: tid, fork: "owner" },
-            { id: tid, fork: "main" },
-            { id: tid, fork: "easy" },
-          ]),
-          language: "ja-jp",
-        };
-      }
+      const server = result.server || DEFAULT_SERVER;
+      const threadKey = result.threadKey;
+      const params = result.params;
 
       console.log("[NicoSideComment] Comment server:", server);
 
@@ -231,6 +255,11 @@
       // Step 5: Render into overlay
       renderComments();
       hideLoading();
+      console.log(
+        "[NicoSideComment] Fetch→render:",
+        Math.round(performance.now() - fetchStart),
+        "ms"
+      );
     } catch (err) {
       console.error("[NicoSideComment] Comment fetch error:", err);
       hideLoading();
@@ -279,10 +308,14 @@
   // ── Comment Rendering ────────────────────────────
   function renderComments() {
     if (!ensureOverlay()) return;
+    const renderStart = performance.now();
 
     const sc = overlay.querySelector(".nsc-scroll-container");
     if (!sc) return;
     sc.innerHTML = "";
+
+    // Rebuild the id → element registry for O(1) NG removal
+    commentElementMap = new Map();
 
     if (commentsCache.length === 0) {
       sc.innerHTML =
@@ -290,12 +323,19 @@
       return;
     }
 
+    // Build all items in a DocumentFragment first so the container is
+    // reflowed only once instead of once per comment.
+    const fragment = document.createDocumentFragment();
+
     for (const c of commentsCache) {
       const item = document.createElement("div");
       item.className = "nsc-comment-item";
       item.setAttribute("data-nsc-vpos-ms", String(c.vposMs));
       item.setAttribute("data-nsc-time", formatVpos(c.vposMs));
-      if (c.id) item.setAttribute("data-nsc-id", String(c.id));
+      if (c.id) {
+        item.setAttribute("data-nsc-id", String(c.id));
+        commentElementMap.set(String(c.id), item);
+      }
 
       // ── Main column (body + meta) ──
       const main = document.createElement("div");
@@ -390,8 +430,17 @@
         }
       });
 
-      sc.appendChild(item);
+      fragment.appendChild(item);
     }
+
+    sc.appendChild(fragment);
+    console.log(
+      "[NicoSideComment] Render",
+      commentsCache.length,
+      "comments:",
+      Math.round(performance.now() - renderStart),
+      "ms"
+    );
   }
 
   // ── Comment Action Menu (click to open) ───────────
@@ -525,8 +574,7 @@
       .filter((x) => x.body && x.body.includes(needle))
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => !x.body || !x.body.includes(needle));
-    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
-    if (sc) removeElementsByIds(sc, targetIds);
+    removeElementsByIds(targetIds);
   }
 
   async function addUserNg(c) {
@@ -538,16 +586,20 @@
       .filter((x) => x.userId === c.userId)
       .map((x) => x.id);
     commentsCache = commentsCache.filter((x) => x.userId !== c.userId);
-    const sc = overlay ? overlay.querySelector(".nsc-scroll-container") : null;
-    if (sc) removeElementsByIds(sc, targetIds);
+    removeElementsByIds(targetIds);
   }
 
-  // Remove comment DOM elements by their data-nsc-id values
-  function removeElementsByIds(sc, ids) {
+  // Remove comment DOM elements by their data-nsc-id values.
+  // Uses the id → element registry built by renderComments() so removal is
+  // O(1) per id instead of a full querySelectorAll scan per id.
+  function removeElementsByIds(ids) {
     for (const id of ids) {
       if (id === undefined || id === null || id === "") continue;
-      sc.querySelectorAll(`[data-nsc-id="${CSS.escape(String(id))}"]`)
-        .forEach((el) => el.remove());
+      const el = commentElementMap.get(String(id));
+      if (el) {
+        el.remove();
+        commentElementMap.delete(String(id));
+      }
     }
   }
 
@@ -722,7 +774,7 @@
   // force inline !important via setProperty(), and re-apply it whenever
   // floating-ui rewrites the panel's style (observed via attributes).
   function applyPanelShift() {
-    if (panelShiftObserver) return;
+    if (panelShiftObserver || panelBootObserver) return;
 
     const shiftPanel = () => {
       document
@@ -737,16 +789,46 @@
 
     shiftPanel();
 
-    panelShiftObserver = new MutationObserver(shiftPanel);
-    panelShiftObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["style"],
+    // Observe only the floating panel element itself (style attribute changes
+    // from floating-ui). Previously document.body was watched with
+    // childList + subtree, firing on every DOM/style change across the page
+    // (seek bar, time display, controller updates).
+    const panel = document.querySelector(
+      '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+    );
+    if (panel) {
+      panelShiftObserver = new MutationObserver(shiftPanel);
+      panelShiftObserver.observe(panel, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+      return;
+    }
+
+    // Panel is not rendered yet: watch the body only until it appears, then
+    // switch to the direct (cheap) observation above.
+    panelBootObserver = new MutationObserver(() => {
+      const el = document.querySelector(
+        '[data-nvpc-scope="watch-floating-panel"][data-nvpc-part="floating"]'
+      );
+      if (!el) return;
+      panelBootObserver.disconnect();
+      panelBootObserver = null;
+      shiftPanel();
+      panelShiftObserver = new MutationObserver(shiftPanel);
+      panelShiftObserver.observe(el, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
     });
+    panelBootObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   function removePanelShift() {
+    if (panelBootObserver) {
+      panelBootObserver.disconnect();
+      panelBootObserver = null;
+    }
     if (panelShiftObserver) {
       panelShiftObserver.disconnect();
       panelShiftObserver = null;
